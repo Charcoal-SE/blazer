@@ -26,7 +26,7 @@ module Blazer
   class << self
     attr_accessor :audit
     attr_reader :time_zone
-    attr_accessor :user_name
+    attr_writer :user_name
     attr_writer :user_class
     attr_writer :user_method
     attr_accessor :before_action
@@ -43,7 +43,6 @@ module Blazer
     attr_accessor :slack_webhook_url
   end
   self.audit = true
-  self.user_name = :name
   self.check_schedules = ["5 minutes", "1 hour", "1 day"]
   self.anomaly_checks = false
   self.async = false
@@ -81,6 +80,13 @@ module Blazer
       end
     end
     @user_method
+  end
+
+  def self.user_name
+    if !defined?(@user_name)
+      @user_name = (settings["user_name"] || "name").to_sym
+    end
+    @user_name
   end
 
   def self.settings

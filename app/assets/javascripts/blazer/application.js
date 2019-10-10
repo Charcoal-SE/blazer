@@ -1,11 +1,12 @@
 //= require ./jquery
-//= require ./jquery_ujs
+//= require ./jquery-ujs
 //= require ./stupidtable
+//= require ./stupidtable-custom-settings
 //= require ./jquery.stickytableheaders
 //= require ./selectize
-//= require ./highlight.pack
+//= require ./highlight.min
 //= require ./moment
-//= require ./moment-timezone
+//= require ./moment-timezone-with-data
 //= require ./daterangepicker
 //= require ./Chart.js
 //= require ./chartkick
@@ -18,6 +19,7 @@
 //= require ./fuzzysearch
 
 Vue.config.devtools = false
+Vue.config.productionTip = false
 
 $(document).on('mouseenter', '.dropdown-toggle', function () {
   $(this).parent().addClass('open')

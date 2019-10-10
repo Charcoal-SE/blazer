@@ -1,3 +1,3 @@
 module Blazer
-  VERSION = "1.10.0.charcoal"
+  VERSION = "2.2.1.charcoal"
 end

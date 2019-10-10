@@ -1,11 +1,16 @@
+# dependencies
 require "csv"
 require "yaml"
 require "chartkick"
 require "safely/core"
+
+# modules
 require "blazer/version"
 require "blazer/data_source"
 require "blazer/result"
 require "blazer/run_statement"
+
+# adapters
 require "blazer/adapters/base_adapter"
 require "blazer/adapters/athena_adapter"
 require "blazer/adapters/bigquery_adapter"
@@ -14,9 +19,13 @@ require "blazer/adapters/drill_adapter"
 require "blazer/adapters/druid_adapter"
 require "blazer/adapters/elasticsearch_adapter"
 require "blazer/adapters/mongodb_adapter"
+require "blazer/adapters/neo4j_adapter"
 require "blazer/adapters/presto_adapter"
+require "blazer/adapters/salesforce_adapter"
 require "blazer/adapters/sql_adapter"
 require "blazer/adapters/snowflake_adapter"
+
+# engine
 require "blazer/engine"
 
 module Blazer
@@ -33,18 +42,22 @@ module Blazer
     attr_accessor :from_email
     attr_accessor :cache
     attr_accessor :transform_statement
+    attr_accessor :transform_variable
     attr_accessor :check_schedules
     attr_accessor :anomaly_checks
+    attr_accessor :forecasting
     attr_accessor :async
     attr_accessor :images
     attr_accessor :query_viewable
     attr_accessor :query_editable
     attr_accessor :override_csp
     attr_accessor :slack_webhook_url
+    attr_accessor :mapbox_access_token
   end
   self.audit = true
   self.check_schedules = ["5 minutes", "1 hour", "1 day"]
   self.anomaly_checks = false
+  self.forecasting = false
   self.async = false
   self.images = false
   self.override_csp = false
@@ -58,8 +71,6 @@ module Blazer
     "system requested abort", # redshift
     "maximum statement execution time exceeded" # mysql
   ]
-  BELONGS_TO_OPTIONAL = {}
-  BELONGS_TO_OPTIONAL[:optional] = true if Rails::VERSION::MAJOR >= 5
 
   def self.time_zone=(time_zone)
     @time_zone = time_zone.is_a?(ActiveSupport::TimeZone) ? time_zone : ActiveSupport::TimeZone[time_zone.to_s]
@@ -102,20 +113,11 @@ module Blazer
 
   def self.data_sources
     @data_sources ||= begin
-      ds = Hash[
-        settings["data_sources"].map do |id, s|
-          [id, Blazer::DataSource.new(id, s)]
-        end
-      ]
-      ds.default = ds.values.first
+      ds = Hash.new { |hash, key| raise Blazer::Error, "Unknown data source: #{key}" }
+      settings["data_sources"].each do |id, s|
+        ds[id] = Blazer::DataSource.new(id, s)
+      end
       ds
-
-      # TODO Blazer 2.0
-      # ds2 = Hash.new { |hash, key| raise Blazer::Error, "Unknown data source: #{key}" }
-      # ds.each do |k, v|
-      #   ds2[k] = v
-      # end
-      # ds2
     end
   end
 
@@ -223,7 +225,9 @@ Blazer.register_adapter "cassandra", Blazer::Adapters::CassandraAdapter
 Blazer.register_adapter "drill", Blazer::Adapters::DrillAdapter
 Blazer.register_adapter "druid", Blazer::Adapters::DruidAdapter
 Blazer.register_adapter "elasticsearch", Blazer::Adapters::ElasticsearchAdapter
+Blazer.register_adapter "neo4j", Blazer::Adapters::Neo4jAdapter
 Blazer.register_adapter "presto", Blazer::Adapters::PrestoAdapter
 Blazer.register_adapter "mongodb", Blazer::Adapters::MongodbAdapter
+Blazer.register_adapter "salesforce", Blazer::Adapters::SalesforceAdapter
 Blazer.register_adapter "sql", Blazer::Adapters::SqlAdapter
 Blazer.register_adapter "snowflake", Blazer::Adapters::SnowflakeAdapter

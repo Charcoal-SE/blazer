@@ -1,16 +1,12 @@
 module Blazer
   class QueriesController < BaseController
     before_action :set_query, only: [:show, :edit, :update, :destroy, :refresh]
-    before_action :set_data_source, only: [:tables, :schema, :cancel]
+    before_action :set_data_source, only: [:tables, :docs, :schema, :cancel]
 
     def home
-      if params[:filter] == "dashboards"
-        @queries = []
-      else
-        set_queries(1000)
-      end
+      set_queries(1000)
 
-      if params[:filter] && params[:filter] != "dashboards"
+      if params[:filter]
         @dashboards = [] # TODO show my dashboards
       else
         @dashboards = Blazer::Dashboard.order(:name)
@@ -117,14 +113,13 @@ module Blazer
 
         options = {user: blazer_user, query: @query, refresh_cache: params[:check], run_id: @run_id, async: Blazer.async}
         if Blazer.async && request.format.symbol != :csv
-          result = []
-          Blazer::RunStatementJob.perform_async(result, @data_source, @statement, options)
+          Blazer::RunStatementJob.perform_later(@data_source.id, @statement, options)
           wait_start = Time.now
           loop do
-            sleep(0.02)
-            break if result.any? || Time.now - wait_start > 3
+            sleep(0.1)
+            @result = @data_source.run_results(@run_id)
+            break if @result || Time.now - wait_start > 3
           end
-          @result = result.first
         else
           @result = Blazer::RunStatement.new.perform(@data_source, @statement, options)
         end
@@ -137,6 +132,13 @@ module Blazer
           @error = @result.error
           @cached_at = @result.cached_at
           @just_cached = @result.just_cached
+
+          @forecast = @query && @result.forecastable? && params[:forecast]
+          if @forecast
+            @result.forecast
+            @forecast_error = @result.forecast_error
+            @forecast = @forecast_error.nil?
+          end
 
           render_run
         else
@@ -179,6 +181,12 @@ module Blazer
 
     def tables
       render json: @data_source.tables
+    end
+
+    def docs
+      @smart_variables = @data_source.smart_variables
+      @linked_columns = @data_source.linked_columns
+      @smart_columns = @data_source.smart_columns
     end
 
     def schema

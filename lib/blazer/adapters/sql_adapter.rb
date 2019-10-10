@@ -26,9 +26,8 @@ module Blazer
 
             result = select_all("#{statement} /*#{comment}*/")
             columns = result.columns
-            cast_method = Rails::VERSION::MAJOR < 5 ? :type_cast : :cast_value
             result.rows.each do |untyped_row|
-              rows << (result.column_types.empty? ? untyped_row : columns.each_with_index.map { |c, i| untyped_row[i] ? result.column_types[c].send(cast_method, untyped_row[i]) : untyped_row[i] })
+              rows << (result.column_types.empty? ? untyped_row : columns.each_with_index.map { |c, i| untyped_row[i] ? result.column_types[c].send(:cast_value, untyped_row[i]) : untyped_row[i] })
             end
           end
         rescue => e
@@ -41,19 +40,37 @@ module Blazer
       end
 
       def tables
-        result = data_source.run_statement(connection_model.send(:sanitize_sql_array, ["SELECT table_name FROM information_schema.tables WHERE table_schema IN (?) ORDER BY table_name", schemas]), refresh_cache: true)
-        result.rows.map(&:first)
+        sql = add_schemas("SELECT table_schema, table_name FROM information_schema.tables")
+        result = data_source.run_statement(sql, refresh_cache: true)
+        if postgresql? || redshift? || snowflake?
+          result.rows.sort_by { |r| [r[0] == default_schema ? "" : r[0], r[1]] }.map do |row|
+            table =
+              if row[0] == default_schema
+                row[1]
+              else
+                "#{row[0]}.#{row[1]}"
+              end
+
+            table = table.downcase if snowflake?
+
+            {
+              table: table,
+              value: connection_model.connection.quote_table_name(table)
+            }
+          end
+        else
+          result.rows.map(&:second).sort
+        end
       end
 
       def schema
-        result = data_source.run_statement(connection_model.send(:sanitize_sql_array, ["SELECT table_schema, table_name, column_name, data_type, ordinal_position FROM information_schema.columns WHERE table_schema IN (?) ORDER BY 1, 2", schemas]))
-        result.rows.group_by { |r| [r[0], r[1]] }.map { |k, vs| {schema: k[0], table: k[1], columns: vs.sort_by { |v| v[2] }.map { |v| {name: v[2], data_type: v[3]} }} }
+        sql = add_schemas("SELECT table_schema, table_name, column_name, data_type, ordinal_position FROM information_schema.columns")
+        result = data_source.run_statement(sql)
+        result.rows.group_by { |r| [r[0], r[1]] }.map { |k, vs| {schema: k[0], table: k[1], columns: vs.sort_by { |v| v[2] }.map { |v| {name: v[2], data_type: v[3]} }} }.sort_by { |t| [t[:schema] == default_schema ? "" : t[:schema], t[:table]] }
       end
 
       def preview_statement
-        if postgresql?
-          "SELECT * FROM \"{table}\" LIMIT 10"
-        elsif sqlserver?
+        if sqlserver?
           "SELECT TOP (10) * FROM {table}"
         else
           "SELECT * FROM {table} LIMIT 10"
@@ -92,9 +109,9 @@ module Blazer
 
       def cancel(run_id)
         if postgresql?
-          select_all("SELECT pg_cancel_backend(pid) FROM pg_stat_activity WHERE pid <> pg_backend_pid() AND query LIKE '%,run_id:#{run_id}%'")
+          select_all("SELECT pg_cancel_backend(pid) FROM pg_stat_activity WHERE pid <> pg_backend_pid() AND query LIKE ?", ["%,run_id:#{run_id}%"])
         elsif redshift?
-          first_row = select_all("SELECT pid FROM stv_recents WHERE status = 'Running' AND query LIKE '%,run_id:#{run_id}%'").first
+          first_row = select_all("SELECT pid FROM stv_recents WHERE status = 'Running' AND query LIKE ?", ["%,run_id:#{run_id}%"]).first
           if first_row
             select_all("CANCEL #{first_row["pid"].to_i}")
           end
@@ -107,7 +124,8 @@ module Blazer
 
       protected
 
-      def select_all(statement)
+      def select_all(statement, params = [])
+        statement = connection_model.send(:sanitize_sql_array, [statement] + params) if params.any?
         connection_model.connection.select_all(statement)
       end
 
@@ -132,23 +150,38 @@ module Blazer
         ["SQLServer", "tinytds", "mssql"].include?(adapter_name)
       end
 
+      def snowflake?
+        data_source.adapter == "snowflake"
+      end
+
       def adapter_name
         # prevent bad data source from taking down queries/new
         connection_model.connection.adapter_name rescue nil
       end
 
-      def schemas
-        settings["schemas"] || [connection_model.connection_config[:schema] || default_schema]
+      def default_schema
+        @default_schema ||= begin
+          if postgresql? || redshift?
+            "public"
+          elsif sqlserver?
+            "dbo"
+          else
+            connection_model.connection_config[:database]
+          end
+        end
       end
 
-      def default_schema
-        if postgresql? || redshift?
-          "public"
-        elsif sqlserver?
-          "dbo"
+      def add_schemas(query)
+        if settings["schemas"]
+          where = "table_schema IN (?)"
+          schemas = settings["schemas"]
         else
-          connection_model.connection_config[:database]
+          where = "table_schema NOT IN (?)"
+          schemas = ["information_schema"]
+          schemas.map!(&:upcase) if snowflake?
+          schemas << "pg_catalog" if postgresql? || redshift?
         end
+        connection_model.send(:sanitize_sql_array, ["#{query} WHERE #{where}", schemas])
       end
 
       def set_timeout(timeout)

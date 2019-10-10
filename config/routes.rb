@@ -5,12 +5,16 @@ Blazer::Engine.routes.draw do
     post :refresh, on: :member
     get :tables, on: :collection
     get :schema, on: :collection
+    get :docs, on: :collection
   end
+
   resources :checks, except: [:show] do
     get :run, on: :member
   end
-  resources :dashboards do
+
+  resources :dashboards, except: [:index] do
     post :refresh, on: :member
   end
+
   root to: "queries#home"
 end

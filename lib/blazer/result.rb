@@ -1,6 +1,6 @@
 module Blazer
   class Result
-    attr_reader :data_source, :columns, :rows, :error, :cached_at, :just_cached
+    attr_reader :data_source, :columns, :rows, :error, :cached_at, :just_cached, :forecast_error
 
     def initialize(data_source, columns, rows, error, cached_at, just_cached)
       @data_source = data_source
@@ -69,6 +69,8 @@ module Blazer
           "line"
         elsif column_types == ["time", "string", "numeric"]
           "line2"
+        elsif column_types == ["string", "numeric"] && @columns.last == "pie"
+          "pie"
         elsif column_types.compact.size >= 2 && column_types == ["string"] + (column_types.compact.size - 1).times.map { "numeric" }
           "bar"
         elsif column_types == ["string", "string", "numeric"]
@@ -77,6 +79,32 @@ module Blazer
           "scatter"
         end
       end
+    end
+
+    def forecastable?
+      @forecastable ||= Blazer.forecasting && column_types == ["time", "numeric"] && @rows.size >= 10
+    end
+
+    def forecast
+      # TODO cache it?
+      # don't want to put result data (even hashed version)
+      # into cache without developer opt-in
+      forecast = Trend.forecast(Hash[@rows], count: 30)
+      @rows.each do |row|
+        row[2] = nil
+      end
+      @rows.unshift(*forecast.map { |k, v| [k, nil, v] })
+      @columns << "forecast"
+
+      # reset cache
+      @column_types = nil
+      @chart_type = nil
+
+      forecast
+    rescue => e
+      @forecast_error = String.new("Error generating forecast")
+      @forecast_error << ": #{e.message.sub("Invalid parameter: ", "")}"
+      nil
     end
 
     def detect_anomaly
@@ -131,39 +159,44 @@ module Blazer
     def anomaly?(series)
       series = series.reject { |v| v[0].nil? }.sort_by { |v| v[0] }
 
-      csv_str =
-        CSV.generate do |csv|
-          csv << ["timestamp", "count"]
-          series.each do |row|
-            csv << row
-          end
-        end
-
-      r_script = %x[which Rscript].chomp
-      type = series.any? && series.last.first.to_time - series.first.first.to_time >= 2.weeks ? "ts" : "vec"
-      args = [type, csv_str]
-      raise "R not found" if r_script.empty?
-      command = "#{r_script} --vanilla #{File.expand_path("../detect_anomalies.R", __FILE__)} #{args.map { |a| Shellwords.escape(a) }.join(" ")}"
-      output = %x[#{command}]
-      if output.empty?
-        raise "Unknown R error"
-      end
-
-      rows = CSV.parse(output, headers: true)
-      error = rows.first && rows.first["x"]
-      raise error if error
-
-      timestamps = []
-      if type == "ts"
-        rows.each do |row|
-          timestamps << Time.parse(row["timestamp"])
-        end
-        timestamps.include?(series.last[0].to_time)
+      if Blazer.anomaly_checks == "trend"
+        anomalies = Trend.anomalies(Hash[series])
+        anomalies.include?(series.last[0])
       else
-        rows.each do |row|
-          timestamps << row["index"].to_i
+        csv_str =
+          CSV.generate do |csv|
+            csv << ["timestamp", "count"]
+            series.each do |row|
+              csv << row
+            end
+          end
+
+        r_script = %x[which Rscript].chomp
+        type = series.any? && series.last.first.to_time - series.first.first.to_time >= 2.weeks ? "ts" : "vec"
+        args = [type, csv_str]
+        raise "R not found" if r_script.empty?
+        command = "#{r_script} --vanilla #{File.expand_path("../detect_anomalies.R", __FILE__)} #{args.map { |a| Shellwords.escape(a) }.join(" ")}"
+        output = %x[#{command}]
+        if output.empty?
+          raise "Unknown R error"
         end
-        timestamps.include?(series.length)
+
+        rows = CSV.parse(output, headers: true)
+        error = rows.first && rows.first["x"]
+        raise error if error
+
+        timestamps = []
+        if type == "ts"
+          rows.each do |row|
+            timestamps << Time.parse(row["timestamp"])
+          end
+          timestamps.include?(series.last[0].to_time)
+        else
+          rows.each do |row|
+            timestamps << row["index"].to_i
+          end
+          timestamps.include?(series.length)
+        end
       end
     end
   end

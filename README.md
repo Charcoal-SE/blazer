@@ -6,6 +6,8 @@ Explore your data with SQL. Easily create charts and dashboards, and share them 
 
 [![Screenshot](https://blazer.dokkuapp.com/assets/screenshot-6ca3115a518b488026e48be83ba0d4c9.png)](https://blazer.dokkuapp.com)
 
+Blazer 2.0 was recently released! See [instructions for upgrading](#20).
+
 :tangerine: Battle-tested at [Instacart](https://www.instacart.com/opensource)
 
 ## Features
@@ -84,52 +86,13 @@ Here’s what it looks like with cron.
 0   8 * * * rake blazer:send_failing_checks
 ```
 
-For Slack notifications, create an [incoming webhook](https://slack.com/apps/A0F7XDUAZ-incoming-webhooks) and set: [master]
+For Slack notifications, create an [incoming webhook](https://slack.com/apps/A0F7XDUAZ-incoming-webhooks) and set:
 
 ```sh
 BLAZER_SLACK_WEBHOOK_URL=https://hooks.slack.com/...
 ```
 
 Name the webhook “Blazer” and add a cool icon.
-
-## Permissions
-
-### PostgreSQL
-
-Create a user with read only permissions:
-
-```sql
-BEGIN;
-CREATE ROLE blazer LOGIN PASSWORD 'secret123';
-GRANT CONNECT ON DATABASE database_name TO blazer;
-GRANT USAGE ON SCHEMA public TO blazer;
-GRANT SELECT ON ALL TABLES IN SCHEMA public TO blazer;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO blazer;
-COMMIT;
-```
-
-### MySQL
-
-Create a user with read only permissions:
-
-```sql
-GRANT SELECT, SHOW VIEW ON database_name.* TO blazer@’127.0.0.1′ IDENTIFIED BY ‘secret123‘;
-FLUSH PRIVILEGES;
-```
-
-### MongoDB
-
-Create a user with read only permissions:
-
-```
-db.createUser({user: "blazer", pwd: "password", roles: ["read"]})
-```
-
-Also, make sure authorization is enabled when you start the server.
-
-### Sensitive Data
-
-Check out [Hypershield](https://github.com/ankane/hypershield) to shield sensitive data.
 
 ## Authentication
 
@@ -170,6 +133,60 @@ end
 ```
 
 Be sure to render or redirect for unauthorized users.
+
+## Permissions
+
+Blazer runs each query in a transaction and rolls it back to prevent queries from modifying data. As an additional line of defense, we recommend using a read only user.
+
+### PostgreSQL
+
+Create a user with read only permissions:
+
+```sql
+BEGIN;
+CREATE ROLE blazer LOGIN PASSWORD 'secret123';
+GRANT CONNECT ON DATABASE database_name TO blazer;
+GRANT USAGE ON SCHEMA public TO blazer;
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO blazer;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO blazer;
+COMMIT;
+```
+
+### MySQL
+
+Create a user with read only permissions:
+
+```sql
+GRANT SELECT, SHOW VIEW ON database_name.* TO blazer@’127.0.0.1′ IDENTIFIED BY ‘secret123‘;
+FLUSH PRIVILEGES;
+```
+
+### MongoDB
+
+Create a user with read only permissions:
+
+```
+db.createUser({user: "blazer", pwd: "password", roles: ["read"]})
+```
+
+Also, make sure authorization is enabled when you start the server.
+
+## Sensitive Data
+
+If your database contains sensitive or personal data, check out [Hypershield](https://github.com/ankane/hypershield) to shield it.
+
+## Encrypted Data
+
+If you need to search encrypted data, use [blind indexing](https://github.com/ankane/blind_index).
+
+You can have Blazer transform specific variables with:
+
+```ruby
+Blazer.transform_variable = lambda do |name, value|
+  value = User.compute_email_bidx(value) if name == "email_bidx"
+  value
+end
+```
 
 ## Queries
 
@@ -314,10 +331,18 @@ SELECT gender, zip_code, COUNT(*) FROM users GROUP BY 1, 2
 
 ### Scatter Chart
 
-2 columns - both numeric
+2 columns - both numeric - [Example](https://blazer.dokkuapp.com/queries/16-scatter-chart)
 
 ```sql
 SELECT x, y FROM table
+```
+
+### Pie Chart
+
+2 columns - string, numeric - and last column named `pie` - [Example](https://blazer.dokkuapp.com/queries/17-pie-chart)
+
+```sql
+SELECT gender, COUNT(*) AS pie FROM users GROUP BY 1
 ```
 
 ### Maps
@@ -360,24 +385,64 @@ Then create check with optional emails if you want to be notified. Emails are se
 
 ## Anomaly Detection
 
-Anomaly detection is supported thanks to Twitter’s [AnomalyDetection](https://github.com/twitter/AnomalyDetection) library.
+Blazer supports two different approaches to anomaly detection.
 
-First, [install R](https://cloud.r-project.org/). Then, run:
+### Trend
 
-```R
-install.packages("devtools")
-devtools::install_github("twitter/AnomalyDetection")
+[Trend](https://trendapi.org/) is easiest to set up but uses an external service.
+
+Add [trend](https://github.com/ankane/trend) to your Gemfile:
+
+```ruby
+gem 'trend'
 ```
 
 And add to `config/blazer.yml`:
 
 ```yml
-anomaly_checks: true
+anomaly_checks: trend
+```
+
+### R
+
+R is harder to set up but doesn’t use an external service. It uses Twitter’s [AnomalyDetection](https://github.com/twitter/AnomalyDetection) library.
+
+First, [install R](https://cloud.r-project.org/). Then, run:
+
+```R
+install.packages("remotes")
+remotes::install_github("twitter/AnomalyDetection")
+```
+
+And add to `config/blazer.yml`:
+
+```yml
+anomaly_checks: r
 ```
 
 If upgrading from version 1.4 or below, also follow the [upgrade instructions](#15).
 
 If you’re on Heroku, follow [these additional instructions](#anomaly-detection-on-heroku).
+
+## Forecasting
+
+Blazer has experimental support for forecasting through [Trend](https://trendapi.org/).
+
+[Example](https://blazer.dokkuapp.com/queries/18-forecast?forecast=t)
+
+Add [trend](https://github.com/ankane/trend) to your Gemfile:
+
+```ruby
+gem 'trend'
+```
+
+And add to `config/blazer.yml`:
+
+```yml
+forecasting: trend
+```
+
+A forecast link will appear for queries that return 2 columns with types timestamp and numeric.
 
 ## Data Sources
 
@@ -405,14 +470,16 @@ data_sources:
 - [Apache Drill](#apache-drill)
 - [Cassandra](#cassandra)
 - [Druid](#druid)
-- [Elasticsearch](#elasticsearch) [beta]
+- [Elasticsearch](#elasticsearch)
 - [Google BigQuery](#google-bigquery)
 - [IBM DB2 and Informix](#ibm-db2-and-informix)
 - [MongoDB](#mongodb-1)
 - [MySQL](#mysql-1)
+- [Neo4j](#neo4j-experimental)
 - [Oracle](#oracle)
 - [PostgreSQL](#postgresql-1)
 - [Presto](#presto)
+- [Salesforce](#salesforce-experimental)
 - [Snowflake](#snowflake)
 - [SQLite](#sqlite)
 - [SQL Server](#sql-server)
@@ -472,9 +539,7 @@ data_sources:
 
 ### Druid
 
-First, [enable SQL support](http://druid.io/docs/latest/querying/sql.html#configuration) on the broker.
-
-Set:
+Enable [SQL support](http://druid.io/docs/latest/querying/sql.html#configuration) on the broker and set:
 
 ```yml
 data_sources:
@@ -530,6 +595,17 @@ data_sources:
     url: mysql2://user:password@hostname:3306/database
 ```
 
+### Neo4j [experimental]
+
+Add [neo4j-core](https://github.com/neo4jrb/neo4j-core) to your Gemfile and set:
+
+```yml
+data_sources:
+  my_source:
+    adapter: neo4j
+    url: http://user:password@hostname:7474
+```
+
 ### Oracle
 
 Use [activerecord-oracle_enhanced-adapter](https://github.com/rsim/oracle-enhanced).
@@ -554,15 +630,59 @@ data_sources:
     url: presto://user@hostname:8080/catalog
 ```
 
+### Salesforce [experimental]
+
+Add [restforce](https://github.com/restforce/restforce) to your Gemfile and set:
+
+```yml
+data_sources:
+  my_source:
+    adapter: salesforce
+```
+
+And set the appropriate environment variables:
+
+```sh
+SALESFORCE_USERNAME="username"
+SALESFORCE_PASSWORD="password"
+SALESFORCE_SECURITY_TOKEN="security token"
+SALESFORCE_CLIENT_ID="client id"
+SALESFORCE_CLIENT_SECRET="client secret"
+SALESFORCE_API_VERSION="41.0"
+```
+
+Supports [SOQL](https://developer.salesforce.com/docs/atlas.en-us.soql_sosl.meta/soql_sosl/sforce_api_calls_soql.htm)
+
 ### Snowflake
 
-First, install the [ODBC driver](https://docs.snowflake.net/manuals/user-guide/odbc.html). Add [odbc_adapter](https://github.com/localytics/odbc_adapter) to your Gemfile and set:
+First, install ODBC. For Homebrew, use:
+
+```sh
+brew install unixodbc
+```
+
+For Ubuntu, use:
+
+```sh
+sudo apt-get install unixodbc-dev
+```
+
+For Heroku, use the [Apt buildpack](https://github.com/heroku/heroku-buildpack-apt) and create an `Aptfile` with:
+
+```text
+unixodbc-dev
+https://sfc-repo.snowflakecomputing.com/odbc/linux/2.19.16/snowflake-odbc-2.19.16.x86_64.deb
+```
+
+> This installs the driver at `/app/.apt/usr/lib/snowflake/odbc/lib/libSnowflake.so`
+
+Then, download the [Snowflake ODBC driver](https://docs.snowflake.net/manuals/user-guide/odbc-download.html). Add [odbc_adapter](https://github.com/localytics/odbc_adapter) to your Gemfile and set:
 
 ```yml
 data_sources:
   my_source:
     adapter: snowflake
-    dsn: ProductionSnowflake
+    conn_str: Driver=/path/to/libSnowflake.so;uid=user;pwd=password;server=host.snowflakecomputing.com
 ```
 
 ### SQLite
@@ -618,16 +738,30 @@ Blazer supports a basic permissions model.
 
 Have team members who want to learn SQL? Here are a few great, free resources.
 
-- [Khan Academy](https://www.khanacademy.org/computing/computer-programming/sql)
-- [Codecademy](https://www.codecademy.com/learn/learn-sql)
+- [The Data School](https://dataschool.com/learn-sql/)
+- [SQLBolt](https://sqlbolt.com/)
 
 ## Useful Tools
 
-For an easy way to group by day, week, month, and more with correct time zones, check out [Groupdate](https://github.com/ankane/groupdate.sql).
+For an easy way to group by day, week, month, and more with correct time zones, check out [Groupdate.sql](https://github.com/ankane/groupdate.sql).
 
 ## Standalone Version
 
 Looking for a standalone version? Check out [Ghost Blazer](https://github.com/buren/ghost_blazer).
+
+## Performance
+
+By default, queries take up a request while they are running. To run queries asynchronously, add to your config:
+
+```yml
+async: true
+```
+
+**Note:** Requires Rails 5+ and caching to be enabled. If you have multiple web processes, your app must use a centralized cache store like Memcached or Redis.
+
+```ruby
+config.cache_store = :mem_cache_store
+```
 
 ## Anomaly Detection on Heroku
 
@@ -648,7 +782,7 @@ if (!"AnomalyDetection" %in% installed.packages()) {
 
 Commit and deploy away. The first deploy may take a few minutes.
 
-## Content Security Policy [master]
+## Content Security Policy
 
 If views are stuck with a `Loading...` message, there might be a problem with strict CSP settings in your app. This can be checked with Firefox or Chrome dev tools. You can allow Blazer to override these settings for its controllers with:
 
@@ -658,7 +792,7 @@ override_csp: true
 
 ## Upgrading
 
-### 1.9.1 [master]
+### 2.0
 
 To use Slack notifications, create a migration
 
@@ -817,12 +951,6 @@ audit: true
 # email to send checks from
 # from_email: blazer@example.org
 ```
-
-## TODO
-
-- advanced permissions
-- standalone version
-- better navigation
 
 ## History
 
